@@ -1,0 +1,14 @@
+[Unit]
+Description=Tictoc Factory cycle runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=milkathedog
+WorkingDirectory=/opt/tictoc-factory
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/tictoc-factory/bin/run_cycle.sh
+
+[Install]
+WantedBy=multi-user.target

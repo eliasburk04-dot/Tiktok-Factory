@@ -1,0 +1,10 @@
+content_policy:
+  max_posts_per_day: 3
+  min_source_score: 100
+  preferred_modes:
+    - hybrid
+    - reddit_story_gameplay
+    - longform_clip
+  notes:
+    - Keep secrets in configs/.env only.
+    - Longform transcription defaults to sidecar files unless a provider is added later.

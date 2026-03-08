@@ -1,0 +1,21 @@
+accounts:
+  - name: account-placeholder-1
+    enabled: true
+    uploader: local_archive
+    posting_windows:
+      - "17:20-17:40"
+      - "19:00-19:20"
+      - "20:40-21:00"
+    timezone: America/New_York
+    template_tags: ["story", "clip"]
+    min_spacing_minutes: 60
+  - name: account-placeholder-2
+    enabled: false
+    uploader: local_archive
+    posting_windows:
+      - "17:20-17:40"
+      - "19:00-19:20"
+      - "20:40-21:00"
+    timezone: America/New_York
+    template_tags: ["story"]
+    min_spacing_minutes: 60

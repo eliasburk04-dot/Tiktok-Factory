@@ -1,0 +1,2 @@
+[console_scripts]
+tictoc-factory = tictoc_factory.cli:app

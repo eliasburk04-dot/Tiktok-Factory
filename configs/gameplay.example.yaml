@@ -1,0 +1,10 @@
+gameplay_library:
+  ready_clip_folder: data/input/gameplay/
+  raw_longform_folder: data/input/gameplay_longform/
+  placeholders:
+    - brainrot-gameplay-001.mp4
+    - brainrot-gameplay-002.mp4
+  notes:
+    - Drop pre-cut clips into the ready clip folder if you already have them.
+    - Drop long raw gameplay recordings into the raw longform folder to auto-slice them.
+    - The selector prefers clips closest to the required duration.

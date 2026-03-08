@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.pyright/
+.ruff_cache/
+*.pyc
+logs/
+data/
+configs/*.local.yaml
+configs/.env
+coverage.xml
+htmlcov/
