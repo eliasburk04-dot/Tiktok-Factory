@@ -26,21 +26,39 @@ tts:
   word_timing_mode: auto
   # openai_instructions: "Custom TTS prompt for voice style"
 subtitles:
-  font_name: DejaVu Sans
+  font_name: Montserrat Black
   font_file: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
-  font_size: 46
-  max_words_per_line: 4
+  font_size: 62
+  max_words_per_line: 3
   max_lines_per_caption: 2
+  max_chars_per_line: 18
+  min_words_per_caption: 2
+  target_words_per_caption: 4
+  max_words_per_caption: 5
   margin_horizontal: 120
-  position_y: 0.56
-  outline: 5
-  shadow: 3
+  position_y: 0.52
+  outline: 9
+  shadow: 4
   stroke_color: "#000000"
   shadow_color: "#000000CC"
-  highlight_color: "#00e5ff"
+  inactive_text_color: "#F8F6F2"
+  active_text_color: "#111111"
+  highlight_color: "#FFD54A"
+  caption_background_color: "#101418CC"
+  caption_background_padding_x: 36
+  caption_background_padding_y: 24
+  caption_background_radius: 32
+  active_word_padding_x: 18
+  active_word_padding_y: 12
+  word_spacing: 20
+  line_spacing: 20
   active_word_scale: 1.18
-  pop_animation_strength: 0.08
+  pop_animation_strength: 0.12
   pop_animation_ms: 80
+  caption_lead_in_ms: 40
+  caption_linger_ms: 110
+  pause_threshold_ms: 180
+  max_caption_duration_seconds: 1.80
 story_pacing:
   hook_max_words: 8
   max_segment_words: 12
@@ -54,6 +72,10 @@ story_pacing:
 reddit_card:
   enabled: true
   duration_seconds: 2.5
+  intro_animation_seconds: 0.18
+  outro_animation_seconds: 0.40
+  # transition_sfx_path: /opt/tictoc-factory/assets/audio/universfield-swoosh-06-351021.mp3
+  transition_sfx_volume: 0.75
   card_width: 930
   position_y: 0.5
   corner_radius: 30
@@ -82,3 +104,5 @@ composition:
   width: 1080
   height: 1920
   font_file: /usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf
+  target_fps: 30
+  gameplay_target_fps: 30

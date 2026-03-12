@@ -6,6 +6,7 @@ from pathlib import Path
 from ..models import CompositionConfig, ScriptArtifact, SubtitleConfig, TranscriptSegment, WordTiming
 from ..utils.files import atomic_write_json, atomic_write_text
 from ..utils.text import chunk_words
+from .layout import build_caption_rows, split_caption_segments
 
 
 def _format_srt_timestamp(seconds: float) -> str:
@@ -37,23 +38,22 @@ class SubtitleGenerator:
         segment_timings: Sequence[TranscriptSegment] | None = None,
         audio_duration: float | None = None,
     ) -> Path:
-        segments = [
+        source_segments = [
             segment if segment.words else segment.model_copy(update={"words": self._estimate_word_timings(segment)})
             for segment in (segment_timings or self._estimate_script_segments(script, audio_duration=audio_duration))
         ]
+        display_segments = split_caption_segments(source_segments, self.config)
         if output_path.suffix.lower() == ".ass":
-            atomic_write_text(output_path, self._build_story_ass(segments))
-            atomic_write_json(output_path.with_suffix(".kinetic.json"), self._build_story_kinetic_payload(segments))
+            atomic_write_text(output_path, self._build_story_ass(display_segments))
+            atomic_write_json(output_path.with_suffix(".kinetic.json"), self._build_story_kinetic_payload(display_segments))
             return output_path
 
         lines = []
-        for index, segment in enumerate(segments, start=1):
+        for index, segment in enumerate(display_segments, start=1):
             lines.append(
-                
-                    f"{index}\n"
-                    f"{_format_srt_timestamp(segment.start)} --> {_format_srt_timestamp(segment.end)}\n"
-                    f"{self._wrap_text(segment.text)}\n"
-                
+                f"{index}\n"
+                f"{_format_srt_timestamp(segment.start)} --> {_format_srt_timestamp(segment.end)}\n"
+                f"{self._wrap_text(segment.text)}\n"
             )
         atomic_write_text(output_path, "\n".join(lines).strip() + "\n")
         return output_path
@@ -82,7 +82,9 @@ class SubtitleGenerator:
             start = max(segment.start, clip_start) - clip_start
             end = min(segment.end, clip_end) - clip_start
             lines.append(
-                f"{index}\n{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n{self._wrap_text(segment.text)}\n"
+                f"{index}\n"
+                f"{_format_srt_timestamp(start)} --> {_format_srt_timestamp(end)}\n"
+                f"{self._wrap_text(segment.text, max_lines=self.config.max_lines_per_caption)}\n"
             )
         atomic_write_text(output_path, "\n".join(lines).strip() + "\n")
         return output_path
@@ -111,7 +113,13 @@ class SubtitleGenerator:
 
     def _build_story_kinetic_payload(self, segments: Sequence[TranscriptSegment]) -> dict[str, object]:
         return {
-            "format": "kinetic_subtitles_v1",
+            "format": "kinetic_subtitles_v2",
+            "theme": {
+                "font_name": self.config.font_name,
+                "font_size": self.config.font_size,
+                "highlight_color": self.config.highlight_color,
+                "position_y": self.config.position_y,
+            },
             "segments": [segment.model_dump(mode="json") for segment in segments],
         }
 
@@ -149,7 +157,7 @@ class SubtitleGenerator:
             (
                 "Dialogue: 0,"
                 f"{_format_ass_timestamp(segment.start)},{_format_ass_timestamp(segment.end)},Story,,0,0,0,,"
-                f"{{\\an5\\pos({x_position},{y_position})}}{self._wrap_text(segment.text, ass=True)}"
+                f"{{\\an5\\pos({x_position},{y_position})}}{self._wrap_segment_text(segment, ass=True)}"
             )
             for segment in segments
         ]
@@ -169,13 +177,20 @@ class SubtitleGenerator:
             cursor = word_end
         return words
 
-    def _wrap_text(self, text: str, *, ass: bool = False) -> str:
+    def _wrap_text(self, text: str, *, ass: bool = False, max_lines: int | None = None) -> str:
         words = text.split()
-        lines: list[str] = []
-        for index in range(0, len(words), self.config.max_words_per_line):
-            if len(lines) >= self.config.max_lines_per_caption:
-                break
-            line_words = words[index : index + self.config.max_words_per_line]
-            lines.append(" ".join(line_words))
+        rows = build_caption_rows(words, self.config)
+        if max_lines is not None:
+            rows = rows[:max_lines]
+        lines = [" ".join(words[index] for index in row) for row in rows]
+        separator = "\\N" if ass else "\n"
+        return separator.join(lines)
+
+    def _wrap_segment_text(self, segment: TranscriptSegment, *, ass: bool = False) -> str:
+        if not segment.words:
+            return self._wrap_text(segment.text, ass=ass)
+        tokens = [word.text for word in segment.words]
+        rows = build_caption_rows(tokens, self.config)
+        lines = [" ".join(tokens[index] for index in row) for row in rows]
         separator = "\\N" if ass else "\n"
         return separator.join(lines)

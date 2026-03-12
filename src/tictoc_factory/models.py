@@ -129,7 +129,7 @@ class TTSConfig(BaseModel):
     provider: str = "auto"
     openai_model: str = "gpt-4o-mini-tts"
     openai_voice: str = "nova"
-    elevenlabs_model: str = "eleven_multilingual_v2"
+    elevenlabs_model: str = "eleven_flash_v2_5"
     elevenlabs_voice_id: str = "pNInz6obpgDQGcFmaJgB"
     system_voice: str = "Samantha"
     sample_rate_hz: int = 44_100
@@ -163,25 +163,72 @@ class TTSConfig(BaseModel):
 class SubtitleConfig(BaseModel):
     font_name: str = "Montserrat Black"
     font_file: str = "/opt/tictoc-factory/fonts/Montserrat-Black.ttf"
-    font_size: int = 56
+    font_size: int = 62
     max_words_per_line: int = 3
     max_lines_per_caption: int = 2
+    max_chars_per_line: int = 18
+    min_words_per_caption: int = 2
+    target_words_per_caption: int = 4
+    max_words_per_caption: int = 5
     margin_horizontal: int = 120
     position_y: float = 0.50
-    outline: int = 8
-    shadow: int = 3
+    outline: int = 9
+    shadow: int = 4
     stroke_color: str = "#000000"
     shadow_color: str = "#000000CC"
-    highlight_color: str = "#00e5ff"
+    inactive_text_color: str = "#F8F6F2"
+    active_text_color: str = "#111111"
+    highlight_color: str = "#FFD54A"
+    caption_background_color: str = "#101418CC"
+    caption_background_padding_x: int = 36
+    caption_background_padding_y: int = 24
+    caption_background_radius: int = 32
+    active_word_padding_x: int = 18
+    active_word_padding_y: int = 12
+    word_spacing: int = 20
+    line_spacing: int = 20
     active_word_scale: float = 1.18
     pop_animation_strength: float = 0.18
     pop_animation_ms: int = 80
+    caption_lead_in_ms: int = 40
+    caption_linger_ms: int = 110
+    pause_threshold_ms: int = 180
+    max_caption_duration_seconds: float = 1.80
 
     @field_validator("position_y")
     @classmethod
     def validate_position_y(cls, value: float) -> float:
         if value <= 0 or value >= 1:
             raise ValueError("subtitle position_y must be between 0 and 1")
+        return value
+
+    @field_validator(
+        "font_size",
+        "max_words_per_line",
+        "max_lines_per_caption",
+        "max_chars_per_line",
+        "min_words_per_caption",
+        "target_words_per_caption",
+        "max_words_per_caption",
+        "margin_horizontal",
+        "outline",
+        "shadow",
+        "caption_background_padding_x",
+        "caption_background_padding_y",
+        "caption_background_radius",
+        "active_word_padding_x",
+        "active_word_padding_y",
+        "word_spacing",
+        "line_spacing",
+        "pop_animation_ms",
+        "caption_lead_in_ms",
+        "caption_linger_ms",
+        "pause_threshold_ms",
+    )
+    @classmethod
+    def validate_positive_integers(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError("subtitle numeric settings must be zero or greater")
         return value
 
     @field_validator("active_word_scale")
@@ -205,22 +252,49 @@ class SubtitleConfig(BaseModel):
             raise ValueError("pop_animation_ms must be zero or greater")
         return value
 
+    @field_validator("max_caption_duration_seconds")
+    @classmethod
+    def validate_max_caption_duration_seconds(cls, value: float) -> float:
+        if value <= 0:
+            raise ValueError("max_caption_duration_seconds must be greater than zero")
+        return value
+
+    @model_validator(mode="after")
+    def validate_caption_word_limits(self) -> SubtitleConfig:
+        if self.min_words_per_caption > self.target_words_per_caption:
+            raise ValueError("min_words_per_caption must be less than or equal to target_words_per_caption")
+        if self.target_words_per_caption > self.max_words_per_caption:
+            raise ValueError("target_words_per_caption must be less than or equal to max_words_per_caption")
+        return self
+
 
 class StoryPacingConfig(BaseModel):
     hook_max_words: int = 8
     max_segment_words: int = 12
     suspense_segments: int = 9
     minimum_total_words: int = 60
-    target_duration_seconds_min: int = 30
-    target_duration_seconds_max: int = 60
+    target_duration_seconds_min: int = 70
+    target_duration_seconds_max: int = 85
+    estimated_characters_per_minute: int = 800
     intro_pause_ms: int = 180
     mid_pause_ms: int = 140
     final_pause_ms: int = 90
+
+    @field_validator("estimated_characters_per_minute")
+    @classmethod
+    def validate_estimated_characters_per_minute(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("estimated_characters_per_minute must be greater than zero")
+        return value
 
 
 class RedditCardConfig(BaseModel):
     enabled: bool = True
     duration_seconds: float = 2.5
+    intro_animation_seconds: float = 0.18
+    outro_animation_seconds: float = 0.40
+    transition_sfx_path: str | None = None
+    transition_sfx_volume: float = 0.75
     card_width: int = 930
     position_y: float = 0.5
     corner_radius: int = 30
@@ -234,11 +308,18 @@ class RedditCardConfig(BaseModel):
     secondary_color: str = "#8b949e"
     accent_color: str = "#ff4500"
 
-    @field_validator("duration_seconds")
+    @field_validator("duration_seconds", "intro_animation_seconds", "outro_animation_seconds")
     @classmethod
     def validate_duration(cls, value: float) -> float:
         if value <= 0:
             raise ValueError("reddit card duration must be greater than zero")
+        return value
+
+    @field_validator("transition_sfx_volume")
+    @classmethod
+    def validate_transition_sfx_volume(cls, value: float) -> float:
+        if value < 0 or value > 2:
+            raise ValueError("reddit card transition_sfx_volume must be between 0 and 2")
         return value
 
     @field_validator("position_y")
@@ -261,6 +342,15 @@ class CompositionConfig(BaseModel):
     width: int = 1080
     height: int = 1920
     font_file: str = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    target_fps: int = 30
+    gameplay_target_fps: int = 30
+
+    @field_validator("width", "height", "target_fps", "gameplay_target_fps")
+    @classmethod
+    def validate_positive_integers(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("composition numeric settings must be greater than zero")
+        return value
 
 
 class AccountConfig(BaseModel):
