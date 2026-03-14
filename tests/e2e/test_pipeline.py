@@ -96,6 +96,7 @@ story_pacing:
   minimum_total_words: 20
   target_duration_seconds_min: 15
   target_duration_seconds_max: 25
+  estimated_characters_per_minute: 240
   intro_pause_ms: 180
   mid_pause_ms: 140
   final_pause_ms: 90

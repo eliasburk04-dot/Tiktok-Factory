@@ -32,3 +32,31 @@ def test_viral_scoring_penalizes_short_flat_content() -> None:
     result = calculator.score_candidate(candidate)
 
     assert result.normalized < 0.25
+
+
+def test_viral_scoring_prefers_story_length_close_to_target_window() -> None:
+    calculator = ViralScoreCalculator()
+    short_candidate = ContentCandidate(
+        id="short",
+        subreddit="confessions",
+        title="Something awkward happened at dinner",
+        body=" ".join(["short"] * 25),
+        score=2500,
+        num_comments=300,
+        created_utc=1730985600,
+    )
+    target_candidate = ContentCandidate(
+        id="target",
+        subreddit="confessions",
+        title="Something awkward happened at dinner",
+        body=" ".join(["target"] * 220),
+        score=2500,
+        num_comments=300,
+        created_utc=1730985600,
+    )
+
+    short_result = calculator.score_candidate(short_candidate)
+    target_result = calculator.score_candidate(target_candidate)
+
+    assert target_result.metrics["length_fit"] > short_result.metrics["length_fit"]
+    assert target_result.total > short_result.total

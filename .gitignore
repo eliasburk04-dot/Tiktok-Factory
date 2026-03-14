@@ -10,3 +10,14 @@ configs/*.local.yaml
 configs/.env
 coverage.xml
 htmlcov/
+.coverage
+
+# macOS
+.DS_Store
+
+# Artifacts (rendered videos, frames, samples)
+artifacts/
+
+# Personal/session files
+handoff_prompt.md
+bin/tg_deliver_test.sh

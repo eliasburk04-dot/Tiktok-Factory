@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import re
 import shutil
 from collections.abc import Mapping, Sequence
@@ -18,6 +19,10 @@ _SPOKEN_WORD_PATTERN = re.compile(r"[A-Za-z0-9']+")
 
 def _has_command(command: str) -> bool:
     return shutil.which(command) is not None
+
+
+def _normalize_alignment_token(value: str) -> str:
+    return "".join(_SPOKEN_WORD_PATTERN.findall(value)).lower()
 
 
 @dataclass(frozen=True)
@@ -285,16 +290,16 @@ class OpenAITTSProvider(BaseTTSProvider):
         if not source_tokens or not transcribed_words:
             return []
         normalized_transcribed = [
-            (self._normalize_alignment_token(word.text), word)
+            (_normalize_alignment_token(word.text), word)
             for word in transcribed_words
-            if self._normalize_alignment_token(word.text)
+            if _normalize_alignment_token(word.text)
         ]
         if len(normalized_transcribed) < len(source_tokens):
             return []
         cursor = 0
         aligned: list[WordTiming] = []
         for source_token in source_tokens:
-            normalized_source = self._normalize_alignment_token(source_token)
+            normalized_source = _normalize_alignment_token(source_token)
             if not normalized_source:
                 continue
             while cursor < len(normalized_transcribed) and normalized_transcribed[cursor][0] != normalized_source:
@@ -313,9 +318,6 @@ class OpenAITTSProvider(BaseTTSProvider):
             )
             cursor += 1
         return aligned
-
-    def _normalize_alignment_token(self, value: str) -> str:
-        return "".join(_SPOKEN_WORD_PATTERN.findall(value)).lower()
 
 
 class MacOSTTSProvider(BaseTTSProvider):
@@ -375,88 +377,189 @@ class ElevenLabsTTSProvider(BaseTTSProvider):
         raise NotImplementedError("ElevenLabs handles word timings natively, use synthesize()")
 
     def synthesize(self, text: str, output_path: Path, *, segments: Sequence[StorySegment] | None = None) -> SynthesisResult:
-        import base64
         api_key = self.env.get(self.providers.elevenlabs_api_key_env, "").strip()
         if not api_key:
             raise ValueError(f"Missing ElevenLabs API key in {self.providers.elevenlabs_api_key_env}")
 
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        segment_list = list(segments or [StorySegment(stage="context", text=text, pause_after_ms=self.config.sentence_pause_ms)])
+        with TemporaryDirectory(dir=output_path.parent) as temp_dir_name:
+            temp_dir = Path(temp_dir_name)
+            concat_paths: list[Path] = []
+            timed_segments: list[TranscriptSegment] = []
+            cursor = 0.0
+
+            for index, segment in enumerate(segment_list):
+                raw_path = temp_dir / f"segment-{index}.mp3"
+                normalized_path = temp_dir / f"segment-{index}-normalized.wav"
+                previous_text = segment_list[index - 1].text if index > 0 else None
+                next_text = segment_list[index + 1].text if index + 1 < len(segment_list) else None
+                aligned_words = self._request_segment_with_timestamps(
+                    segment.text,
+                    raw_path,
+                    api_key=api_key,
+                    previous_text=previous_text,
+                    next_text=next_text,
+                )
+                self._convert_to_wav(raw_path, normalized_path)
+                duration = probe_duration(normalized_path)
+                words = self._offset_word_timings(aligned_words, offset=cursor, duration=duration, text=segment.text)
+                timed_segments.append(
+                    TranscriptSegment(
+                        start=cursor,
+                        end=cursor + duration,
+                        text=segment.text,
+                        words=words,
+                    )
+                )
+                cursor += duration
+                concat_paths.append(normalized_path)
+                if index < len(segment_list) - 1:
+                    pause_ms = segment.pause_after_ms or self.config.sentence_pause_ms
+                    if pause_ms > 0:
+                        silence_path = temp_dir / f"pause-{index}.wav"
+                        self._create_silence(pause_ms / 1000, silence_path)
+                        concat_paths.append(silence_path)
+                        cursor += pause_ms / 1000
+
+            combined_path = temp_dir / "combined.wav"
+            self._concat_wav_files(concat_paths, combined_path)
+            self._normalize_audio(combined_path, output_path)
+            return SynthesisResult(
+                path=output_path,
+                duration_seconds=probe_duration(output_path),
+                segments=timed_segments,
+            )
+
+    def _request_segment_with_timestamps(
+        self,
+        text: str,
+        output_path: Path,
+        *,
+        api_key: str,
+        previous_text: str | None,
+        next_text: str | None,
+    ) -> list[WordTiming]:
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{self.config.elevenlabs_voice_id}/with-timestamps"
         headers = {
             "xi-api-key": api_key,
             "Content-Type": "application/json",
         }
-        data = {
+        payload: dict[str, object] = {
             "text": text,
             "model_id": self.config.elevenlabs_model,
+            "output_format": "mp3_44100_128",
         }
+        payload["voice_settings"] = {"speed": self._elevenlabs_speed()}
+        if previous_text:
+            payload["previous_text"] = previous_text
+        if next_text:
+            payload["next_text"] = next_text
 
-        response = requests.post(url, headers=headers, json=data, timeout=self.providers.openai_timeout_seconds)
+        response = requests.post(url, headers=headers, json=payload, timeout=self.providers.openai_timeout_seconds)
         response.raise_for_status()
+        body = response.json()
+        output_path.write_bytes(base64.b64decode(body["audio_base64"]))
+        return self._align_segment_words(text, body.get("alignment", {}))
 
-        payload = response.json()
-        audio_bytes = base64.b64decode(payload["audio_base64"])
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(audio_bytes)
+    def _align_segment_words(self, text: str, alignment: object) -> list[WordTiming]:
+        if not isinstance(alignment, Mapping):
+            return []
+        raw_words = self._extract_alignment_words(alignment)
+        if not raw_words:
+            return []
+        aligned_words = self._align_tokens_to_words(text.split(), raw_words)
+        return aligned_words or raw_words
 
-        duration = probe_duration(output_path)
+    def _extract_alignment_words(self, alignment: Mapping[str, object]) -> list[WordTiming]:
+        chars = alignment.get("characters")
+        starts = alignment.get("character_start_times_seconds")
+        ends = alignment.get("character_end_times_seconds")
+        if not isinstance(chars, list) or not isinstance(starts, list) or not isinstance(ends, list):
+            return []
+        if not chars or len(chars) != len(starts) or len(chars) != len(ends):
+            return []
 
-        alignment = payload.get("alignment", {})
-        chars = alignment.get("characters", [])
-        starts = alignment.get("character_start_times_seconds", [])
-        ends = alignment.get("character_end_times_seconds", [])
+        words: list[WordTiming] = []
+        current_word: list[str] = []
+        current_start: float | None = None
+        for index, char in enumerate(chars):
+            if not isinstance(char, str):
+                continue
+            start = float(starts[index])
+            end = float(ends[index])
+            if char.isspace():
+                if current_word and current_start is not None:
+                    word_end = end if index == 0 else float(ends[index - 1])
+                    words.append(
+                        WordTiming(
+                            start=current_start,
+                            end=word_end,
+                            text="".join(current_word),
+                        )
+                    )
+                    current_word = []
+                    current_start = None
+                continue
+            if current_start is None:
+                current_start = start
+            current_word.append(char)
 
-        global_words: list[WordTiming] = []
-        if chars and starts and ends:
-            current_word = ""
-            current_start = -1.0
+        if current_word and current_start is not None:
+            words.append(WordTiming(start=current_start, end=float(ends[-1]), text="".join(current_word)))
+        return words
 
-            for i, char in enumerate(chars):
-                if char.strip():
-                    if current_start < 0:
-                        current_start = starts[i]
-                    current_word += char
-                elif current_word:
-                    # End of a word
-                    global_words.append(WordTiming(start=current_start, end=ends[i-1], text=current_word))
-                    current_word = ""
-                    current_start = -1.0
+    def _align_tokens_to_words(
+        self,
+        source_tokens: Sequence[str],
+        generated_words: Sequence[WordTiming],
+    ) -> list[WordTiming]:
+        normalized_generated = [
+            (_normalize_alignment_token(word.text), word)
+            for word in generated_words
+            if _normalize_alignment_token(word.text)
+        ]
+        if len(normalized_generated) < len(source_tokens):
+            return []
+        cursor = 0
+        aligned: list[WordTiming] = []
+        for source_token in source_tokens:
+            normalized_source = _normalize_alignment_token(source_token)
+            if not normalized_source:
+                continue
+            while cursor < len(normalized_generated) and normalized_generated[cursor][0] != normalized_source:
+                cursor += 1
+            if cursor >= len(normalized_generated):
+                return []
+            matched_word = normalized_generated[cursor][1]
+            aligned.append(WordTiming(start=matched_word.start, end=matched_word.end, text=source_token))
+            cursor += 1
+        return aligned
 
-            # Catch the last word if it doesn't end with a space
-            if current_word and len(chars) > 0:
-                global_words.append(WordTiming(start=current_start, end=ends[-1], text=current_word))
-
-        # Assign global words to the provided segments based on text matching
-        segment_list = list(segments or [StorySegment(stage="context", text=text, pause_after_ms=self.config.sentence_pause_ms)])
-        timed_segments: list[TranscriptSegment] = []
-
-        word_idx = 0
-        seg_start = 0.0
-        for segment in segment_list:
-            seg_words = []
-            segment_clean = [w for w in re.split(r"\\s+", segment.text) if w]
-            
-            words_to_take = len(segment_clean)
-            for _ in range(words_to_take):
-                if word_idx < len(global_words):
-                    seg_words.append(global_words[word_idx])
-                    word_idx += 1
-
-            seg_end = seg_words[-1].end if seg_words else seg_start
-            timed_segments.append(
-                TranscriptSegment(
-                    start=seg_words[0].start if seg_words else seg_start,
-                    end=seg_end,
-                    text=segment.text,
-                    words=seg_words,
-                )
+    def _offset_word_timings(
+        self,
+        words: Sequence[WordTiming],
+        *,
+        offset: float,
+        duration: float,
+        text: str,
+    ) -> list[WordTiming]:
+        if not words:
+            return self._build_deterministic_word_timings(text, start=offset, end=offset + duration)
+        offset_words = [
+            WordTiming(
+                start=offset + max(word.start, 0.0),
+                end=offset + min(max(word.end, word.start + 0.03), duration),
+                text=word.text,
             )
-            seg_start = seg_end
+            for word in words
+        ]
+        if offset_words[-1].end < offset + duration:
+            offset_words[-1] = offset_words[-1].model_copy(update={"end": offset + duration})
+        return offset_words
 
-        return SynthesisResult(
-            path=output_path,
-            duration_seconds=duration,
-            segments=timed_segments,
-        )
+    def _elevenlabs_speed(self) -> float:
+        return max(0.7, min(self.config.speech_speed, 1.2))
 
 
 def build_tts_provider(config: TTSConfig, providers: ProviderConfig, env: Mapping[str, str]) -> BaseTTSProvider:

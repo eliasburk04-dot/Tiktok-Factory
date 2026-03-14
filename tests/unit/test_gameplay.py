@@ -62,3 +62,59 @@ def test_gameplay_selector_skips_unreadable_clips(tmp_path: Path, monkeypatch) -
     chosen = selector.select(30.0)
 
     assert chosen == valid
+
+
+def test_gameplay_library_extract_clip_normalizes_output_fps(tmp_path: Path, monkeypatch) -> None:
+    commands: list[list[str]] = []
+
+    def fake_run_command(command: list[str], cwd: Path | None = None) -> None:
+        commands.append(command)
+
+    monkeypatch.setattr("tictoc_factory.media.gameplay.run_command", fake_run_command)
+
+    manager = GameplayLibraryManager(
+        gameplay_dir=tmp_path / "gameplay",
+        raw_gameplay_dir=tmp_path / "gameplay_longform",
+        work_dir=tmp_path / "work",
+        target_lengths=[25],
+        gameplay_speed=2.0,
+        gameplay_target_fps=30,
+    )
+    plan = manager.build_clip_plan(
+        source_path=tmp_path / "gameplay_longform" / "session.mp4",
+        duration=120.0,
+    )[0]
+
+    manager._extract_clip(plan)
+
+    assert len(commands) == 1
+    command = commands[0]
+    filter_value = command[command.index("-filter:v") + 1]
+    assert "setpts=0.5*PTS" in filter_value
+    assert "fps=30" in filter_value
+    assert command[command.index("-r") + 1] == "30"
+
+
+def test_gameplay_library_fingerprint_changes_when_target_fps_changes(tmp_path: Path) -> None:
+    source_path = tmp_path / "gameplay_longform" / "session.mp4"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_bytes(b"video")
+
+    baseline_manager = GameplayLibraryManager(
+        gameplay_dir=tmp_path / "gameplay-a",
+        raw_gameplay_dir=tmp_path / "gameplay_longform",
+        work_dir=tmp_path / "work-a",
+        target_lengths=[25],
+        gameplay_speed=2.0,
+        gameplay_target_fps=30,
+    )
+    changed_manager = GameplayLibraryManager(
+        gameplay_dir=tmp_path / "gameplay-b",
+        raw_gameplay_dir=tmp_path / "gameplay_longform",
+        work_dir=tmp_path / "work-b",
+        target_lengths=[25],
+        gameplay_speed=2.0,
+        gameplay_target_fps=24,
+    )
+
+    assert baseline_manager._fingerprint(source_path) != changed_manager._fingerprint(source_path)

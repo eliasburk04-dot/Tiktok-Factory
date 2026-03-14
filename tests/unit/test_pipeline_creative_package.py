@@ -86,12 +86,12 @@ accounts:
         created_utc=1730985600,
     )
 
-    hook, script, metadata = pipeline._generate_creative_package(candidate=candidate, mode="reddit_story_gameplay", clip=None)
+    _hook, script, metadata = pipeline._generate_creative_package(candidate=candidate, mode="reddit_story_gameplay", clip=None)
 
     # V4: reddit_story_gameplay always uses verbatim text, never the AI creative director
     assert metadata["provider"] == "verbatim"
     assert script.segments
     # Hook should be the original Reddit title verbatim
     assert script.segments[0].text == candidate.title
-    # Narration should contain the original body text verbatim
-    assert candidate.body in script.narration
+    # Narration should stay rooted in the source text, even if trimmed to fit duration targets
+    assert script.narration.startswith(candidate.title)

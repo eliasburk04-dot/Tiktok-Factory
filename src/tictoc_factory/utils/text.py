@@ -8,6 +8,51 @@ _MARKDOWN_DECORATION_PATTERN = re.compile(r"[*_`~>#]+")
 _NAVIGATION_SEPARATOR_PATTERN = re.compile(r"\s*(?:[-|/]|\\-)\s*")
 _NAVIGATION_FRAGMENT_PATTERN = re.compile(r"(?:part|chapter|episode|pt)\s+[ivxlcdm0-9]+", re.IGNORECASE)
 
+# ── Reddit / TikTok abbreviation expansions for TTS ────────────────────────
+_ABBREVIATIONS: dict[str, str] = {
+    "AITA": "Am I the Asshole",
+    "AITAH": "Am I the Asshole",
+    "WIBTA": "Would I be the Asshole",
+    "NTA": "Not the Asshole",
+    "YTA": "You're the Asshole",
+    "ESH": "Everyone Sucks Here",
+    "NAH": "No Assholes Here",
+    "INFO": "Info",
+    "TL;DR": "Too long, didn't read",
+    "TLDR": "Too long, didn't read",
+    "MIL": "Mother in Law",
+    "FIL": "Father in Law",
+    "SIL": "Sister in Law",
+    "BIL": "Brother in Law",
+    "SO": "Significant Other",
+    "DH": "Dear Husband",
+    "DW": "Dear Wife",
+    "LDR": "Long Distance Relationship",
+    "OP": "Original Poster",
+    "TIFU": "Today I Fucked Up",
+    "IMO": "In My Opinion",
+    "IMHO": "In My Humble Opinion",
+    "FYI": "For Your Information",
+    "AFAIK": "As Far As I Know",
+    "TBH": "To Be Honest",
+    "SMH": "Shaking My Head",
+    "IIRC": "If I Recall Correctly",
+    "ETA": "Edited to Add",
+}
+
+# Build a regex that matches any abbreviation as a whole word (case-insensitive).
+_ABBREV_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_ABBREVIATIONS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def expand_abbreviations(value: str) -> str:
+    """Replace Reddit/TikTok abbreviations with their full spoken form."""
+    def _replace(match: re.Match[str]) -> str:
+        return _ABBREVIATIONS.get(match.group(0).upper(), match.group(0))
+    return _ABBREV_PATTERN.sub(_replace, value)
+
 
 def slugify(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value.lower()).strip("-")

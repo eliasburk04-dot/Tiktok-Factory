@@ -56,7 +56,8 @@ class GameplayLibraryManager:
         work_dir: Path,
         target_lengths: list[int],
         clips_per_length: int = 3,
-        gameplay_speed: float = 2.0,
+        gameplay_speed: float = 1.2,
+        gameplay_target_fps: int = 30,
     ) -> None:
         self.gameplay_dir = gameplay_dir
         self.raw_gameplay_dir = raw_gameplay_dir
@@ -64,6 +65,7 @@ class GameplayLibraryManager:
         self.target_lengths = sorted(set(target_lengths))
         self.clips_per_length = clips_per_length
         self.gameplay_speed = max(gameplay_speed, 1.0)
+        self.gameplay_target_fps = max(gameplay_target_fps, 1)
         self.manifest_path = self.work_dir / "gameplay_manifest.json"
         self.gameplay_dir.mkdir(parents=True, exist_ok=True)
         self.raw_gameplay_dir.mkdir(parents=True, exist_ok=True)
@@ -154,16 +156,25 @@ class GameplayLibraryManager:
                 "-i",
                 str(plan.source_path),
                 "-filter:v",
-                f"setpts={pts_factor}*PTS",
+                f"setpts={pts_factor}*PTS,fps={self.gameplay_target_fps}",
                 "-an",
                 "-c:v",
                 "libx264",
+                "-r",
+                str(self.gameplay_target_fps),
                 "-pix_fmt",
                 "yuv420p",
                 str(plan.clip_path),
             ]
         )
 
-    def _fingerprint(self, path: Path) -> dict[str, int]:
+    def _fingerprint(self, path: Path) -> dict[str, object]:
         stat = path.stat()
-        return {"size": int(stat.st_size), "mtime_ns": int(stat.st_mtime_ns)}
+        return {
+            "size": int(stat.st_size),
+            "mtime_ns": int(stat.st_mtime_ns),
+            "gameplay_speed": self.gameplay_speed,
+            "gameplay_target_fps": self.gameplay_target_fps,
+            "clips_per_length": self.clips_per_length,
+            "target_lengths": self.target_lengths,
+        }

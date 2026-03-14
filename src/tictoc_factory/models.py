@@ -334,6 +334,30 @@ class ContentPolicyConfig(BaseModel):
     max_posts_per_day: int = 3
     min_source_score: int = 1500
     preferred_modes: list[ModeName] = Field(default_factory=lambda: ["reddit_story_gameplay"])
+    min_video_duration_seconds: int = 70
+    max_video_duration_seconds: int = 120
+
+    @field_validator("min_video_duration_seconds", "max_video_duration_seconds")
+    @classmethod
+    def validate_duration_bounds(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("video duration bounds must be greater than zero")
+        return value
+
+    @model_validator(mode="after")
+    def validate_min_less_than_max(self) -> ContentPolicyConfig:
+        if self.min_video_duration_seconds > self.max_video_duration_seconds:
+            raise ValueError("min_video_duration_seconds must be <= max_video_duration_seconds")
+        return self
+
+
+class NextcloudConfig(BaseModel):
+    enabled: bool = False
+    base_url: str = ""
+    username: str = ""
+    password_env: str = "NEXTCLOUD_PASSWORD"
+    remote_folder: str = "/TikTok-Factory/ready"
+    timeout_seconds: int = 300
 
 
 class CompositionConfig(BaseModel):
@@ -425,6 +449,7 @@ class FactorySettings(BaseModel):
     scheduler: SchedulerConfig
     content_policy: ContentPolicyConfig
     composition: CompositionConfig = Field(default_factory=CompositionConfig)
+    nextcloud: NextcloudConfig = Field(default_factory=NextcloudConfig)
     paths: PathConfig
     accounts: list[AccountConfig]
     env: dict[str, str] = Field(default_factory=dict)

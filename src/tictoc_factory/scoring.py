@@ -25,7 +25,12 @@ class ViralScoreCalculator:
         engagement = math.log1p(max(candidate.score, 0)) / 4
         comments = math.log1p(max(candidate.num_comments, 0)) / 3
         length_words = len(candidate.body.split())
-        length_fit = 1.8 if 12 <= length_words <= 180 else 0.4
+        if 160 <= length_words <= 320:
+            length_fit = 1.8
+        elif 120 <= length_words <= 420:
+            length_fit = 1.1
+        else:
+            length_fit = 0.4
         marker_boost = marker_hits * 0.8
         total = engagement + comments + length_fit + marker_boost
         normalized = min(total / 8.0, 1.0)

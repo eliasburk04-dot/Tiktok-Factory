@@ -341,6 +341,85 @@ class VideoComposer:
         )
         return output_path
 
+    def _build_looped_gameplay(self, gameplay_path: Path, audio_path: Path) -> Path:
+        """Create a gameplay video long enough to cover the audio duration.
+
+        Uses the concat demuxer to repeat the clip instead of ``-stream_loop -1``
+        which produces corrupt NAL units at loop boundaries.  If probing fails
+        (e.g. files don't exist yet during tests) the original path is returned
+        unchanged so the compose command still receives a valid ``-i`` argument.
+        """
+        import json
+        import math
+        import subprocess
+
+        try:
+            probe = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "json",
+                    str(audio_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            audio_duration = float(json.loads(probe.stdout)["format"]["duration"])
+
+            probe_gp = subprocess.run(
+                [
+                    "ffprobe",
+                    "-v",
+                    "error",
+                    "-show_entries",
+                    "format=duration",
+                    "-of",
+                    "json",
+                    str(gameplay_path),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            clip_duration = float(json.loads(probe_gp.stdout)["format"]["duration"])
+        except (KeyError, ValueError, FileNotFoundError, json.JSONDecodeError):
+            # Probing failed – fall back to the raw path (tests / missing files).
+            return gameplay_path
+
+        # Add 10s safety margin so we never run short
+        loops_needed = math.ceil((audio_duration + 10) / clip_duration)
+        if loops_needed <= 1:
+            return gameplay_path
+
+        concat_path = self.work_dir / f"{gameplay_path.stem}-loop.txt"
+        escaped = self._escape_concat_path(gameplay_path)
+        lines = [f"file '{escaped}'\n" for _ in range(loops_needed)]
+        from ..utils.files import atomic_write_text as _awt
+
+        _awt(concat_path, "".join(lines))
+
+        looped_path = self.work_dir / f"{gameplay_path.stem}-looped.mp4"
+        run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                str(concat_path),
+                "-c",
+                "copy",
+                "-an",
+                str(looped_path),
+            ]
+        )
+        return looped_path
+
     def compose_story_gameplay(
         self,
         *,
@@ -357,6 +436,9 @@ class VideoComposer:
         # V4: Removed zoompan (caused video freeze after ~6s due to internal frame
         # counter exhaustion on loop boundaries) and setpts speed-up (gameplay clips
         # are now pre-accelerated during clip mining).
+        # V4.1: Replaced -stream_loop -1 with concat-demuxer loop to avoid corrupt
+        # NAL units at H.264 loop boundaries.
+        looped_gameplay_path = self._build_looped_gameplay(gameplay_path, audio_path)
         filter_steps = [
             (
                 f"[0:v]scale={self.config.width}:{self.config.height}:force_original_aspect_ratio=increase,"
@@ -367,10 +449,8 @@ class VideoComposer:
         command = [
             "ffmpeg",
             "-y",
-            "-stream_loop",
-            "-1",
             "-i",
-            str(gameplay_path),
+            str(looped_gameplay_path),
             "-i",
             str(audio_path),
         ]
@@ -640,8 +720,11 @@ class VideoComposer:
                 word_text = segment.words[word_index].text
                 base_width, base_height = self._measure_text_box(draw, word_text, base_font)
                 active_width, active_height = self._measure_text_box(draw, word_text, max_active_font)
-                slot_width = max(base_width, active_width)
-                slot_height = max(base_height, active_height)
+                # Use the base size plus half the growth as slot size.  This keeps
+                # words close together while leaving enough room for the active
+                # word to scale up without clipping its neighbours noticeably.
+                slot_width = base_width + (active_width - base_width) * 0.5
+                slot_height = base_height + (active_height - base_height) * 0.5
                 word_slots.append(
                     KineticWordSlot(
                         word_index=word_index,
@@ -878,6 +961,8 @@ class VideoComposer:
     ) -> Path:
         target_fps = self.config.target_fps
         # V4: Removed setpts speed-up — gameplay clips are pre-accelerated during mining.
+        # V4.1: Replaced -stream_loop -1 with concat-demuxer loop.
+        looped_gameplay_path = self._build_looped_gameplay(gameplay_path, clip_path)
         filter_complex = (
             "[0:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[top];"
             "[1:v]scale=1080:960:force_original_aspect_ratio=increase,crop=1080:960[bottom];"
@@ -890,10 +975,8 @@ class VideoComposer:
                 "-y",
                 "-i",
                 str(clip_path),
-                "-stream_loop",
-                "-1",
                 "-i",
-                str(gameplay_path),
+                str(looped_gameplay_path),
                 "-filter_complex",
                 filter_complex,
                 "-map",

@@ -8,6 +8,7 @@ Type=oneshot
 User=milkathedog
 WorkingDirectory=/opt/tictoc-factory
 Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/opt/tictoc-factory/.env
 ExecStart=/opt/tictoc-factory/bin/run_cycle.sh
 
 [Install]

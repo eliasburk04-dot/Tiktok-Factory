@@ -94,10 +94,19 @@ scheduler:
 content_policy:
   max_posts_per_day: 3
   min_source_score: 100
+  min_video_duration_seconds: 70
+  max_video_duration_seconds: 120
   preferred_modes:
     - hybrid
     - reddit_story_gameplay
     - longform_clip
+nextcloud:
+  enabled: false
+  base_url: "https://cloud.example.com"
+  username: "your-username"
+  password_env: "NEXTCLOUD_PASSWORD"
+  remote_folder: "TikTok-Factory/ready"
+  timeout_seconds: 300
 composition:
   layout: split
   subtitles_style: bold_box

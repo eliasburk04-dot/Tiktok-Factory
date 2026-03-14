@@ -54,11 +54,18 @@ accounts:
     assert settings.providers.openai_model == "gpt-5-mini"
     assert settings.tts.provider == "elevenlabs"
     assert settings.tts.elevenlabs_voice_id == "pNInz6obpgDQGcFmaJgB"
-    assert settings.tts.elevenlabs_model == "eleven_multilingual_v2"
+    assert settings.tts.elevenlabs_model == "eleven_flash_v2_5"
     assert settings.tts.speech_speed == 1.16
     assert settings.tts.word_timing_mode == "auto"
     assert settings.subtitles.position_y == 0.50
-    assert settings.story_pacing.target_duration_seconds_min == 30
+    assert settings.subtitles.max_chars_per_line == 18
+    assert settings.subtitles.target_words_per_caption == 4
+    assert settings.subtitles.max_words_per_caption == 5
+    assert settings.story_pacing.target_duration_seconds_min == 70
+    assert settings.story_pacing.target_duration_seconds_max == 85
+    assert settings.story_pacing.estimated_characters_per_minute == 800
+    assert settings.composition.target_fps == 30
+    assert settings.composition.gameplay_target_fps == 30
     assert settings.paths.output_videos == tmp_path / "data" / "output" / "videos"
     assert settings.paths.gameplay_longform_input == tmp_path / "data" / "input" / "gameplay_longform"
     assert settings.accounts[0].name == "local-test"
@@ -138,6 +145,9 @@ subtitles:
   font_size: 34
   max_words_per_line: 6
   max_lines_per_caption: 2
+  max_chars_per_line: 18
+  target_words_per_caption: 5
+  max_words_per_caption: 6
   position_y: 0.54
 story_pacing:
   hook_max_words: 9
@@ -169,6 +179,9 @@ accounts:
     assert settings.tts.word_timing_mode == "deterministic"
     assert settings.subtitles.font_size == 34
     assert settings.subtitles.max_words_per_line == 6
+    assert settings.subtitles.max_chars_per_line == 18
+    assert settings.subtitles.target_words_per_caption == 5
+    assert settings.subtitles.max_words_per_caption == 6
     assert settings.subtitles.position_y == 0.54
     assert settings.story_pacing.hook_max_words == 9
     assert settings.story_pacing.target_duration_seconds_min == 32
@@ -214,3 +227,44 @@ accounts:
     settings = load_settings(factory_config, accounts_config, project_root=tmp_path)
 
     assert settings.tts.word_timing_mode == "deterministic"
+
+
+def test_load_settings_supports_explicit_target_fps_values(tmp_path: Path) -> None:
+    configs_dir = tmp_path / "configs"
+    configs_dir.mkdir()
+    factory_config = configs_dir / "factory.local.yaml"
+    accounts_config = configs_dir / "accounts.local.yaml"
+    factory_config.write_text(
+        """
+project_name: tictoc-factory
+mode: reddit_story_gameplay
+default_subreddits: [nosleep]
+providers:
+  llm_provider: openai
+  transcription_provider: sidecar
+  openai_api_key_env: OPENAI_API_KEY
+  openai_model: gpt-5-mini
+  openai_timeout_seconds: 45
+scheduler:
+  scan_interval_minutes: 15
+  default_clip_lengths_seconds: [30]
+content_policy:
+  max_posts_per_day: 4
+  min_source_score: 100
+composition:
+  target_fps: 24
+  gameplay_target_fps: 30
+"""
+    )
+    accounts_config.write_text(
+        """
+accounts:
+  - name: local-test
+    posting_windows: ["09:00-11:00"]
+"""
+    )
+
+    settings = load_settings(factory_config, accounts_config, project_root=tmp_path)
+
+    assert settings.composition.target_fps == 24
+    assert settings.composition.gameplay_target_fps == 30

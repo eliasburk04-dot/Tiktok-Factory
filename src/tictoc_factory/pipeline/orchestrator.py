@@ -15,6 +15,7 @@ from ..llm.creative import build_openai_creative_director
 from ..media.clip_miner import ClipMiner
 from ..media.composer import VideoComposer
 from ..media.gameplay import GameplayLibraryManager, GameplaySelector
+from ..media.splitter import VideoPart, split_video
 from ..models import (
     AccountConfig,
     ClipCandidate,
@@ -32,6 +33,7 @@ from ..scoring import ViralScoreCalculator
 from ..script_builder import StoryScriptBuilder
 from ..subtitles.generator import SubtitleGenerator
 from ..uploaders.local_archive import LocalArchiveUploader
+from ..uploaders.nextcloud import NextcloudUploader
 from ..utils.files import atomic_write_json
 from ..utils.logging import StructuredLogger
 from ..utils.process import probe_duration
@@ -63,11 +65,23 @@ class FactoryPipeline:
             raw_gameplay_dir=settings.paths.gameplay_longform_input,
             work_dir=settings.paths.work,
             target_lengths=settings.scheduler.default_clip_lengths_seconds,
+            gameplay_target_fps=settings.composition.gameplay_target_fps,
         )
         self.composer = VideoComposer(settings.composition, settings.subtitles, settings.reddit_card, settings.paths.work)
         self.scheduler = PostingScheduler()
         published_root = settings.paths.output_videos.parent / "published"
         self.uploader = LocalArchiveUploader(published_root)
+        self.nextcloud: NextcloudUploader | None = None
+        if settings.nextcloud.enabled and settings.nextcloud.base_url:
+            nc_password = settings.env.get(settings.nextcloud.password_env, "")
+            if nc_password:
+                self.nextcloud = NextcloudUploader(
+                    base_url=settings.nextcloud.base_url,
+                    username=settings.nextcloud.username,
+                    password=nc_password,
+                    remote_folder=settings.nextcloud.remote_folder,
+                    timeout_seconds=settings.nextcloud.timeout_seconds,
+                )
         self.logger = StructuredLogger(settings.paths.logs / "factory.jsonl")
         self.creative_director = build_openai_creative_director(
             api_key=settings.env.get(settings.providers.openai_api_key_env),
@@ -162,6 +176,12 @@ class FactoryPipeline:
                 self.analytics.record_event("discovery_failure", {"source": "reddit", "error": str(error)})
                 self.logger.error("discovery_failure", source="reddit", error=str(error))
                 reddit_candidates = []
+            duration_ready_candidates = [
+                candidate
+                for candidate in reddit_candidates
+                if self.script_builder.supports_target_duration(candidate, mode="reddit_story_gameplay")
+            ]
+            reddit_candidates = duration_ready_candidates
             for candidate in reddit_candidates:
                 # V4: Filter by raw Reddit score (upvotes) directly instead of
                 # the internal viral-score metric to ensure we only pick
@@ -339,45 +359,103 @@ class FactoryPipeline:
             else:
                 self._compose_longform_job(processed_job, clip, subtitle_path, output_video_path)
 
+            # ── Split long videos into parts ────────────────────────────
+            kinetic_path = subtitle_path.with_suffix(".kinetic.json") if subtitle_path else None
+            min_dur = float(self.settings.content_policy.min_video_duration_seconds)
+            max_dur = float(self.settings.content_policy.max_video_duration_seconds)
+            parts = split_video(
+                output_video_path,
+                kinetic_path,
+                self.settings.paths.output_videos,
+                min_duration=min_dur,
+                max_duration=max_dur,
+                job_id=job.job_id,
+            )
+
             score_payload = self.predictor.predict(
                 script=script,
                 source_score=self.scorer.score_candidate(candidate),
                 clip=clip,
             )
             account = self._select_account()
-            scheduled_at = self.scheduler.next_slot(account, now=now, scheduled_jobs=self.queue.list_jobs())
-            scheduled_job = processed_job.model_copy(
-                update={
-                    "state": "scheduled",
-                    "account_name": account.name,
-                    "updated_at": now.isoformat(),
-                    "scheduled_for": scheduled_at.isoformat(),
-                    "output_video_path": str(output_video_path),
-                    "metadata": {
-                        **processed_job.metadata,
-                        "attempts": int(job.metadata.get("attempts", 0)),
-                        "pre_publish": score_payload,
-                        "script_path": str(script_path),
-                        "output_video_path": str(output_video_path),
-                    },
+
+            # ── Schedule each part into consecutive posting slots ────────
+            for part in parts:
+                part_job_id = f"{job.job_id}-part{part.part_number}" if part.total_parts > 1 else job.job_id
+                part_video_path = part.output_path
+
+                scheduled_at = self.scheduler.next_slot(account, now=now, scheduled_jobs=self.queue.list_jobs())
+                part_title = job.title
+                if part.total_parts > 1:
+                    part_title = f"{job.title} (Part {part.part_number}/{part.total_parts})"
+
+                part_metadata = {
+                    **processed_job.metadata,
+                    "attempts": int(job.metadata.get("attempts", 0)),
+                    "pre_publish": score_payload,
+                    "script_path": str(script_path),
+                    "output_video_path": str(part_video_path),
+                    "part_number": part.part_number,
+                    "total_parts": part.total_parts,
+                    "part_start_seconds": part.start_seconds,
+                    "part_end_seconds": part.end_seconds,
                 }
-            )
-            self.queue.upsert(scheduled_job)
-            self.analytics.record_event(
-                "schedule",
-                {
-                    "job_id": scheduled_job.job_id,
-                    "account": account.name,
-                    "scheduled_for": scheduled_job.scheduled_for,
-                    "pre_publish_score": score_payload["score"],
-                },
-            )
-            self.logger.info(
-                "schedule",
-                job_id=scheduled_job.job_id,
-                account=account.name,
-                scheduled_for=scheduled_job.scheduled_for,
-            )
+
+                scheduled_job = QueueJob(
+                    job_id=part_job_id,
+                    mode=job.mode,
+                    source_type=job.source_type,
+                    state="scheduled",
+                    account_name=account.name,
+                    title=part_title,
+                    description=job.description,
+                    created_at=job.created_at,
+                    updated_at=now.isoformat(),
+                    scheduled_for=scheduled_at.isoformat(),
+                    source_path=job.source_path,
+                    output_video_path=str(part_video_path),
+                    metadata=part_metadata,
+                )
+                self.queue.upsert(scheduled_job)
+
+                # ── Upload to Nextcloud ─────────────────────────────────
+                if self.nextcloud:
+                    try:
+                        nc_receipt = self.nextcloud.publish(scheduled_job, part_video_path)
+                        scheduled_job.metadata["nextcloud"] = nc_receipt
+                        self.queue.upsert(scheduled_job)
+                        self.logger.info(
+                            "nextcloud_upload",
+                            job_id=part_job_id,
+                            remote_url=nc_receipt.get("remote_url", ""),
+                        )
+                    except Exception as nc_err:
+                        self.logger.error("nextcloud_upload_failed", job_id=part_job_id, error=str(nc_err))
+
+                self.analytics.record_event(
+                    "schedule",
+                    {
+                        "job_id": part_job_id,
+                        "account": account.name,
+                        "scheduled_for": scheduled_job.scheduled_for,
+                        "pre_publish_score": score_payload["score"],
+                        "part": f"{part.part_number}/{part.total_parts}",
+                    },
+                )
+                self.logger.info(
+                    "schedule",
+                    job_id=part_job_id,
+                    account=account.name,
+                    scheduled_for=scheduled_job.scheduled_for,
+                    part=f"{part.part_number}/{part.total_parts}",
+                )
+
+            # If we created part-jobs, remove the original parent job
+            if parts and parts[0].total_parts > 1:
+                original_path = self.settings.paths.queue_jobs / f"{job.job_id}.json"
+                if original_path.exists():
+                    original_path.unlink()
+
         except Exception as error:
             attempts = int(job.metadata.get("attempts", 0)) + 1
             failed_job = job.model_copy(
