@@ -34,19 +34,20 @@ for VIDEO in "$PROJECT_ROOT/data/output/videos/"*.mp4; do
 
   SEND_FILE="$VIDEO"
   FILE_SIZE=$(stat -c%s "$VIDEO" 2>/dev/null || stat -f%z "$VIDEO")
-  TG_LIMIT=$((48 * 1024 * 1024))  # 48 MB
+  TG_LIMIT=$((18 * 1024 * 1024))  # 18 MB — safe Telegram bot API limit
 
-  # Compress to under 48 MB if needed (Telegram bot API limit)
+  # Compress to under 18 MB if needed
   if [[ "$FILE_SIZE" -gt "$TG_LIMIT" ]]; then
     echo "[telegram] Compressing $BASENAME for delivery …"
     COMPRESSED="/tmp/tg_compressed_${BASENAME}"
-    # Calculate target bitrate: 48MB * 8 bits / duration in seconds
-    DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO" 2>/dev/null || echo 60)
-    TARGET_KBITS=$(( (48 * 8 * 1024) / ${DURATION%.*} ))
-    AUDIO_KBITS=128
-    VIDEO_KBITS=$(( TARGET_KBITS - AUDIO_KBITS - 50 ))
-    ffmpeg -y -i "$VIDEO" -c:v libx264 -b:v "${VIDEO_KBITS}k" -c:a aac -b:a "${AUDIO_KBITS}k" \
-      -vf "scale=720:1280" -movflags +faststart "$COMPRESSED" -loglevel error
+    DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$VIDEO" | cut -d. -f1)
+    VBR=$(( (18 * 8 * 1024 / DUR) - 96 ))
+    ffmpeg -y -i "$VIDEO" \
+      -c:v libx264 -b:v "${VBR}k" \
+      -c:a aac -b:a 96k \
+      -vf scale=540:960 \
+      -movflags +faststart \
+      "$COMPRESSED" -loglevel error
     SEND_FILE="$COMPRESSED"
   fi
 
