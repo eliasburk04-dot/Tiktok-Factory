@@ -149,7 +149,22 @@ class FactoryPipeline:
                 continue
             if not job.output_video_path:
                 continue
-            receipt = self.uploader.publish(job, Path(job.output_video_path))
+            video_path = Path(job.output_video_path)
+            receipt = self.uploader.publish(job, video_path)
+
+            # ── Upload to Nextcloud ─────────────────────────────────────
+            if self.nextcloud:
+                try:
+                    nc_receipt = self.nextcloud.publish(job, video_path)
+                    receipt = {**receipt, **nc_receipt}
+                    self.logger.info(
+                        "nextcloud_upload",
+                        job_id=job.job_id,
+                        remote_url=nc_receipt.get("remote_url", ""),
+                    )
+                except Exception as nc_err:
+                    self.logger.error("nextcloud_upload_failed", job_id=job.job_id, error=str(nc_err))
+
             job = job.model_copy(
                 update={
                     "state": "published",

@@ -17,7 +17,7 @@ class RedditDiscoveryProvider:
         for subreddit in subreddits:
             response = self.session.get(
                 f"https://www.reddit.com/r/{subreddit}/top.json",
-                params={"t": "week", "limit": limit_per_subreddit},
+                params={"t": "day", "limit": limit_per_subreddit},
                 timeout=20,
             )
             response.raise_for_status()
